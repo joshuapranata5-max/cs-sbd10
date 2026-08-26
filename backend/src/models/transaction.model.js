@@ -1,87 +1,87 @@
-const db = require('../config/database');
+const { prisma } = require('../config/database');
 
 class Transaction {
   static async create({ user_id, item_id, quantity, total, description }) {
-    const result = await db.query(
-      'INSERT INTO transactions (user_id, item_id, quantity, total, description) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-      [user_id, item_id, quantity, total, description]
-    );
-    return result.rows[0];
+    const transaction = await prisma.transaction.create({
+      data: {
+        user_id: parseInt(user_id, 10),
+        item_id: parseInt(item_id, 10),
+        quantity: parseInt(quantity, 10),
+        total: parseInt(total, 10),
+        description,
+      },
+    });
+    return transaction;
   }
 
   static async findById(id) {
-    const result = await db.query('SELECT * FROM transactions WHERE id = $1', [id]);
-    return result.rows[0];
+    const transaction = await prisma.transaction.findUnique({
+      where: { id: parseInt(id, 10) },
+    });
+    return transaction;
   }
 
   static async findByUserId(userId) {
-    const result = await db.query(
-      'SELECT * FROM transactions WHERE user_id = $1 ORDER BY created_at DESC',
-      [userId]
-    );
-    return result.rows;
+    const transactions = await prisma.transaction.findMany({
+      where: { user_id: parseInt(userId, 10) },
+      orderBy: { created_at: 'desc' },
+    });
+    return transactions;
   }
 
   static async updateStatus(id, status) {
-    const result = await db.query(
-      'UPDATE transactions SET status = $1 WHERE id = $2 RETURNING *',
-      [status, id]
-    );
-    return result.rows[0];
+    const transaction = await prisma.transaction.update({
+      where: { id: parseInt(id, 10) },
+      data: { status },
+    });
+    return transaction;
   }
 
   static async delete(id) {
-    const result = await db.query('DELETE FROM transactions WHERE id = $1 RETURNING *', [id]);
-    return result.rows[0];
+    const transaction = await prisma.transaction.delete({
+      where: { id: parseInt(id, 10) },
+    });
+    return transaction;
   }
 
   static async pay(transactionId, userId) {
-    // Start transaction
-    const client = await db.pool.connect();
-    try {
-      await client.query('BEGIN');
-
+    return await prisma.$transaction(async (tx) => {
       // 1. Get transaction and verify ownership
-      const transResult = await client.query(
-        'SELECT * FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE',
-        [transactionId, userId]
-      );
-      if (transResult.rows.length === 0) {
+      const transaction = await tx.transaction.findUnique({
+        where: { id: parseInt(transactionId, 10) },
+      });
+
+      if (!transaction || transaction.user_id !== parseInt(userId, 10)) {
         throw new Error('Transaction not found or does not belong to user');
       }
-      const transaction = transResult.rows[0];
       if (transaction.status !== 'pending') {
         throw new Error('Transaction is not pending');
       }
 
       // 2. Get user balance
-      const userResult = await client.query(
-        'SELECT balance FROM users WHERE id = $1 FOR UPDATE',
-        [userId]
-      );
-      const userBalance = parseInt(userResult.rows[0].balance, 10);
-      if (userBalance < transaction.total) {
+      const user = await tx.user.findUnique({
+        where: { id: parseInt(userId, 10) },
+      });
+
+      if (!user || user.balance == null || user.balance < transaction.total) {
         throw new Error('Insufficient balance');
       }
 
       // 3. Deduct balance
-      const newBalance = userBalance - transaction.total;
-      await client.query('UPDATE users SET balance = $1 WHERE id = $2', [newBalance, userId]);
+      const newBalance = user.balance - transaction.total;
+      await tx.user.update({
+        where: { id: parseInt(userId, 10) },
+        data: { balance: newBalance },
+      });
 
       // 4. Update transaction status
-      await client.query(
-        "UPDATE transactions SET status = 'paid' WHERE id = $1",
-        [transactionId]
-      );
+      await tx.transaction.update({
+        where: { id: parseInt(transactionId, 10) },
+        data: { status: 'paid' },
+      });
 
-      await client.query('COMMIT');
-      return { success: true, newBalance, transactionId };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+      return { success: true, newBalance, transactionId: transaction.id };
+    });
   }
 }
 

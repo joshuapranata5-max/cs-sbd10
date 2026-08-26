@@ -32,7 +32,6 @@ export default function RegisterPage() {
       const response = await api.post('/user/register', formData);
       if (response.data.success) {
         setSuccess('Registrasi berhasil! Silakan login.');
-        // Redirect to login after a short delay
         setTimeout(() => {
           router.push('/login');
         }, 2000);

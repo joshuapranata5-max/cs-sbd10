@@ -1,7 +1,8 @@
-const db = require('../config/database');
+const { prisma } = require('../config/database');
 
 class Report {
     static async getTopUsers(limit = 10) {
+        // We use $queryRaw for complex window functions like RANK()
         const query = `
         SELECT 
             u.id, 
@@ -16,8 +17,18 @@ class Report {
         ORDER BY rank ASC
         LIMIT $1
         `;
-        const result = await db.query(query, [limit]);
-        return result.rows;
+        // prisma.$queryRawUnsafe allows us to pass raw query string and parameters. 
+        // For safer parametrized queries with template literals, we use $queryRaw.
+        // Prisma $queryRaw uses tagged template literals, but since we have dynamic limit, 
+        // we can use $queryRawUnsafe or properly tag it.
+        const result = await prisma.$queryRawUnsafe(query, parseInt(limit, 10));
+        
+        // Convert BigInts from Prisma raw queries to Number or String if needed
+        return result.map(row => ({
+            ...row,
+            total_spent: row.total_spent ? Number(row.total_spent) : 0,
+            rank: row.rank ? Number(row.rank) : 0
+        }));
     }
     
     static async getItemsSold() {
@@ -33,8 +44,12 @@ class Report {
         GROUP BY i.id, i.name, i.price
         ORDER BY total_revenue DESC
         `;
-        const result = await db.query(query);
-        return result.rows;
+        const result = await prisma.$queryRawUnsafe(query);
+        return result.map(row => ({
+            ...row,
+            total_quantity_sold: Number(row.total_quantity_sold),
+            total_revenue: Number(row.total_revenue)
+        }));
     }
     
     static async getMonthlySales(year) {
@@ -48,8 +63,12 @@ class Report {
         GROUP BY DATE_TRUNC('month', created_at)
         ORDER BY month ASC
         `;
-        const result = await db.query(query, [year]);
-        return result.rows;
+        const result = await prisma.$queryRawUnsafe(query, parseInt(year, 10));
+        return result.map(row => ({
+            ...row,
+            total_items_sold: Number(row.total_items_sold),
+            total_revenue: Number(row.total_revenue)
+        }));
     }
 }
 
